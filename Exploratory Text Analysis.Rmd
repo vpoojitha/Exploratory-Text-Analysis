@@ -1,0 +1,243 @@
+---
+title: "Exploratory Analysis on textual data"
+author: "Poojitha Vishukumar"
+
+output: html_document
+---
+
+##Introduction:
+  
+Determining useful knowledge from a enormous document collection, effeciently without having to scan through each document in the collection.  Information visualization provides a benificial way to conclude documents in ocular form that enables the user to gain knowlledge of data by understanding and intutiveness, Text visualization is an important subfield of information visualization. This project shows an exploratory analysis on textual data, to obtain overall insights of the data.
+
+#### Step 1: Loading Libraries: 
+
+```{r}
+library(tm)
+library(SnowballC)
+library(wordcloud)
+library(RColorBrewer)
+library(dplyr)
+library(ggplot2)
+library(cluster)
+library(philentropy)
+library(skmeans)
+library(knitr)
+library(treemapify)
+
+```
+
+#### Step 2: Loading data : the corpus
+
+```{r}
+data_a <- VCorpus(DirSource("D:/Desktop/NUIG_DA/visualisation/Github_text/corpus", encoding = "UTF-8"), readerControl = list(language = "eng"))
+
+```
+
+
+#### Step 3: Cleaning the data and Transforming the data 
+The data corpus is processed by replacing the special characters. Replacing "/","@",and "|" with the help of space.tm_map() function. Later, The data is tranformed using tm_map() function. Unwanted stopwords contained in English language, white spaces, numbers and punctuations are removed. Since the stopwords are common in language, their information value is nearly zero Also, the text in corpus is converted into lowercae  and are stemmed.
+
+
+```{r}
+#Removing unnecessary white space, converting the text to lower case, removing common stopwords.
+toSpace <- content_transformer(function (x , pattern ) gsub(pattern, " ", x))
+data_a <- tm_map(data_a, toSpace, "/")
+data_a <- tm_map(data_a, toSpace, "/.")
+data_a <- tm_map(data_a, toSpace, "@")
+data_a <- tm_map(data_a, toSpace, "\\|")
+data_a <- tm_map(data_a, content_transformer(tolower))
+data_a <- tm_map(data_a, removeWords, stopwords("english"))
+data_a <- tm_map(data_a, removeNumbers)
+data_a <- tm_map(data_a, removeWords, c(letters))
+data_a <- tm_map(data_a, stripWhitespace)
+data_a <- tm_map(data_a, removePunctuation)
+data_a <- tm_map(data_a, stemDocument)
+
+
+```
+#### Step 4: Building document term matrix
+
+A term document matrixis a table containing the frequency of the words .Column names are documents and row names are term.
+
+```{r}
+
+data.tdm <- DocumentTermMatrix(data_a, control = list(weighting = function(x) weightTfIdf(x, normalize = TRUE)))
+
+```
+
+
+####Step 5: Removal of sparse terms
+
+We create a text document matrix and remove all the sparse terms and sparsity threshold is set to 0.995. It removes the terms which have atleast 0.995 percentage of empty elements. 
+
+
+```{r}
+
+data.tdm<-removeSparseTerms(data.tdm, 0.995)
+data.tdm.matrix <- data.tdm %>% as.matrix()
+
+# remove any zero rows
+data.tdm.matrix <- data.tdm.matrix[rowSums(data.tdm.matrix^2) !=0,]
+
+```
+
+#### Step 6:Random sampling:  Randomly sampling 25 percentage of documents from corpus
+```{r}
+sample_size = nrow(data.tdm.matrix) * 0.25
+
+data.tdm.matrix.sample <- data.tdm.matrix[sample(1:nrow(data.tdm), sample_size, replace=FALSE),]
+```
+
+
+#### Step 7: Hierarchical Clustering
+
+An Hierarchical Clustering groups similar objects and visually gives us a sense of clusters in a dataset. 
+Here, clustering is obtained by creating distance matrix based on cosine similarity.
+```{r}
+sim_matrix<-distance(data.tdm.matrix.sample, method = "cosine")
+
+
+# Placing document names on columns and rows
+colnames(sim_matrix) <- rownames(data.tdm.matrix.sample)
+rownames(sim_matrix) <- rownames(data.tdm.matrix.sample)
+
+
+# Creating a distance measure for hierarchical clustering
+max_sim <- max(sim_matrix)
+
+dist_matrix <- as.dist(max_sim-sim_matrix)
+
+# hierarchical clustering
+data.tdm.sample.dend <- hclust(dist_matrix, method = "ward.D")
+
+
+# select only the documents from the random sample taken earlier
+data.tdm <- TermDocumentMatrix(data_a)
+data.tdm.sample <- data.tdm[, rownames(data.tdm.matrix.sample)]
+
+# convert to r matrix
+data.tdm.matrix.sample <- data.tdm.sample %>% as.matrix()
+
+
+```
+
+####Step 8: Cutting the dendogram
+Inspecting the clustering induced by the dendogram by making a horizontal cut. We then examine the document contents in each cluster.
+
+
+```{r}
+# number of clusters we wish to examine
+k=6
+
+
+data.tdm.sample.dend.cut <- cutree(data.tdm.sample.dend, k=k)
+
+#number of clusters at the cut
+m <- length(unique(data.tdm.sample.dend.cut))
+
+# create a data frame from the cut 
+data.tdm.sample.dend.cut <- as.data.frame(data.tdm.sample.dend.cut)
+
+#add a meaningful column namane
+colnames(data.tdm.sample.dend.cut) = c("cluster")
+
+# add the doc names as an explicit column
+data.tdm.sample.dend.cut$docs <- rownames(data.tdm.sample.dend.cut)
+
+
+data.tdm.sample.dend.cut$docs<-lapply(data.tdm.sample.dend.cut$docs, tm::removeNumbers)
+
+data.tdm.sample.dend.cut$docs <- unlist(data.tdm.sample.dend.cut$docs)
+```
+
+#### step 9: creating tree map
+Tree map is used to plot the top words in each cluster.Area and color density is used to determine the frequency of the terms in the cluster. In this report I have used area and color to determine the frequency of the term which is also known as double encoding. 
+We can also use a TreeMap to plot the top terms in each cluster.
+
+
+
+```{r}
+
+#number of clusters at the cut
+m <- length(unique(data.tdm.sample.dend.cut$cluster))
+
+# number of terms per cluster to show
+n <-30
+
+#intialise an empty data frame
+#fields initiliased with empty vectors
+df <- data.frame(word=character(), freq = double(),cluster = integer())
+
+# for each cluster plot an explanatory word cloud
+for (i in 1:m) {
+  #the documents in  cluster i
+  cut_doc_ids <-which(data.tdm.sample.dend.cut$cluster==i)
+  
+  #the subset of the matrix with these documents
+  data.tdm.sample.mat.cluster<- data.tdm.matrix.sample[, cut_doc_ids]
+
+  # sort the terms by frequency for the documents in this cluster
+  val <- sort(rowSums(data.tdm.sample.mat.cluster),decreasing=TRUE)
+  dat <- data.frame(word = names(val),freq=val, cluster=i)
+  
+  # we might want scale so that high frequencies in large cluster don't predominate
+  dat[,2] <- scale(dat[,2],center=FALSE, scale=TRUE)
+  
+  # take first n values only
+  dat <-dat[1:n,]
+  
+  #bind the data for this cluster to the df data frame created earlier
+  df<- rbind(df,dat)
+}
+# the geom_treemap seems to only like vectors of values
+df$freq <- as.vector(df$freq)
+
+# simple function to rename the values in the cluster column as "cluster 1, cluster 2, etc"
+clust_name<-function(x){
+   paste("cluster", x)
+}
+
+# apply the function to the 'cluster' column
+ df$cluster<- as.character(apply(df["cluster"], MARGIN = 2,FUN =clust_name ))
+  
+ 
+gg<- ggplot(df, aes(area = freq, fill = freq, subgroup=cluster, label = word)) +
+geom_treemap() +
+geom_treemap_subgroup_border() +
+geom_treemap_subgroup_text(place = "centre", grow = T, alpha = 0.5, colour ="#99d8c9", fontface = "italic", min.size = 10) +
+geom_treemap_text(fontface = "italic", colour = "white", place = "centre", grow = TRUE)
+  
+gg
+```
+
+In the above tree graph, the rectangle with larger area and lighter shade indicates the highest frequency of the term . The words 'use', 'god','armenian', 'game', 'line' appear to be frequently occuring with respective to the six clusters. 
+
+
+```{r}
+gg<- ggplot(df, aes(area = freq, fill = freq, subgroup=cluster, label = word)) +
+geom_treemap() +
+  geom_treemap_text(grow = T, reflow = T, colour = "black") +
+  facet_wrap( ~ cluster) +
+
+  scale_fill_gradientn(colours = terrain.colors(n, alpha = 0.8)) +
+  theme(legend.position = "bottom") +
+  labs(title = "The Most Frequent Terms in each cluster ", caption = "The area of each term is proportional to its relative frequency within cluster")
+
+gg
+```
+
+#### Creating a word cloud for the random sample of the corpus.
+
+```{r}
+
+wordcloud(words=dat$word, freq=dat$freq, min.freq = 5,
+          max.words = 50,random.order = FALSE, rot.per = 0.35,
+          colors = brewer.pal(8,"Dark2"))
+
+```
+####Conclusion:
+
+The tree map is used to show the composition of the whole cluster when there are many components. The clustering performed here is on small random sample of the whole corpus (25%). The size and colour of the words in the tree determine the dominant words in the cluster. The size of the sub category rectangles represent the quantitative value. The term with largest area is the most frequently occurring word in the cluster.  In the final cluster plot, the term 'line' occurs more frequently within the cluster one and 'use','god','game',''write' and 'armenian' occurs more frequently in the clusters 2, 3 ,4, 5 and 6 respectively. 
+The change of color from green to wite show the increase in frequency of the term , similarly with the area of the rectangle. The words ' armenian' and 'muslim' seem to occur more frequently within all the clusters in the random sample considered which is also, depicted in the word cloud created. 
+
+
